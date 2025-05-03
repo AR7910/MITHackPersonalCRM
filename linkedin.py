@@ -51,6 +51,7 @@ class LinkedInConnector:
     def login(self):
         """
         Login to LinkedIn
+        
         Returns:
             bool: True if login successful, False otherwise
         """
@@ -82,7 +83,6 @@ class LinkedInConnector:
             except:
                 logger.error("Login failed or timeout occurred")
                 return False
-        
         except Exception as e:
             logger.error(f"Error during login: {str(e)}")
             return False
@@ -90,9 +90,11 @@ class LinkedInConnector:
     def search_person(self, name, company=None):
         """
         Search for a person on LinkedIn
+        
         Args:
             name: Person's name
             company: Company name (optional)
+            
         Returns:
             str: URL of the first search result, or None if not found
         """
@@ -120,21 +122,22 @@ class LinkedInConnector:
                 
                 # Get first result
                 person_elements = self.browser.find_elements(By.CSS_SELECTOR, ".entity-result__title a")
+                
                 if person_elements:
                     profile_url = person_elements[0].get_attribute("href")
+                    
                     # Clean up the URL to remove tracking parameters
                     if "?" in profile_url:
                         profile_url = profile_url.split("?")[0]
+                    
                     logger.info(f"Found profile: {profile_url}")
                     return profile_url
                 else:
                     logger.warning(f"No results found for {search_query}")
                     return None
-            
             except Exception as e:
                 logger.error(f"Error waiting for search results: {str(e)}")
                 return None
-        
         except Exception as e:
             logger.error(f"Error during person search: {str(e)}")
             return None
@@ -142,9 +145,11 @@ class LinkedInConnector:
     def send_connection_request(self, profile_url, message=None):
         """
         Send a connection request to a LinkedIn profile
+        
         Args:
             profile_url: LinkedIn profile URL
             message: Optional connection message
+            
         Returns:
             bool: True if request sent successfully, False otherwise
         """
@@ -163,6 +168,7 @@ class LinkedInConnector:
             
             # Find the Connect button
             connect_buttons = self.browser.find_elements(By.XPATH, "//button[contains(.,'Connect')]")
+            
             if not connect_buttons:
                 more_buttons = self.browser.find_elements(By.XPATH, "//button[contains(.,'More')]")
                 if more_buttons:
@@ -200,7 +206,6 @@ class LinkedInConnector:
                         
                         logger.info(f"Connection request sent with message to {profile_url}")
                         return True
-                    
                     except Exception as e:
                         logger.warning(f"Could not add message, sending without message: {str(e)}")
                         # Just send without a message
@@ -219,10 +224,49 @@ class LinkedInConnector:
             else:
                 logger.warning(f"Connect button not found for {profile_url}")
                 return False
-        
         except Exception as e:
             logger.error(f"Error sending connection request: {str(e)}")
             return False
+    
+    def check_connection_status(self, profile_url):
+        """
+        Check the connection status of a LinkedIn profile
+        
+        Args:
+            profile_url: LinkedIn profile URL
+            
+        Returns:
+            str: Connection status ("Connected", "Pending", "Not Connected", or "Unknown")
+        """
+        try:
+            if not self.browser:
+                if not self.login():
+                    return "Unknown"
+                    
+            logger.info(f"Checking connection status for: {profile_url}")
+            self.browser.get(profile_url)
+            
+            # Wait for profile to load
+            WebDriverWait(self.browser, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".pv-top-card"))
+            )
+            
+            # Check if there's a "Message" button (indicating connected)
+            message_buttons = self.browser.find_elements(By.XPATH, "//button[contains(.,'Message')]")
+            if message_buttons:
+                return "Connected"
+                
+            # Check if there's a "Pending" button
+            pending_buttons = self.browser.find_elements(By.XPATH, "//button[contains(.,'Pending')]")
+            if pending_buttons:
+                return "Pending"
+                
+            # If neither, assume not connected
+            return "Not Connected"
+                
+        except Exception as e:
+            logger.error(f"Error checking connection status: {str(e)}")
+            return "Unknown"
     
     def close(self):
         """

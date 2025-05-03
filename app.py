@@ -2,10 +2,12 @@ import streamlit as st
 import pandas as pd
 import tempfile
 import os
+import time
 import logging
 from models import Contact
 from document_processor import process_document
 from contact_extractor import extract_contacts
+from linkedin import LinkedInConnector
 import db
 import utils
 from datetime import datetime
@@ -34,6 +36,8 @@ if "extracted_contacts" not in st.session_state:
     st.session_state.extracted_contacts = []
 if "review_mode" not in st.session_state:
     st.session_state.review_mode = False
+if "linkedin_connector" not in st.session_state:
+    st.session_state.linkedin_connector = None
 
 # Helper functions
 def load_contacts():
@@ -61,6 +65,7 @@ def save_extracted_contacts():
         db.save_contacts(st.session_state.extracted_contacts)
         st.session_state.extracted_contacts = []
         st.session_state.review_mode = False
+        load_contacts()
 
 load_contacts()
 
@@ -92,11 +97,67 @@ with st.sidebar:
     )
     
     process_button = st.button("Process Document")
+    
     st.divider()
     
     # Manual add contact
     if st.button("Add Contact Manually"):
         toggle_add_contact()
+    
+    st.divider()
+    
+    # LinkedIn integration
+    st.subheader("LinkedIn Integration")
+    if st.button("Connect with All Contacts"):
+        contacts = db.load_all_contacts()
+        # Find contacts that have either a LinkedIn URL or enough info to search for one
+        linkedin_contacts = [c for c in contacts if 
+                           (c.linkedin and c.connection_status != "Connected" and c.connection_status != "Requested") or
+                           (not c.linkedin and c.name and c.organization)]
+        
+        if not linkedin_contacts:
+            st.info("No contacts with LinkedIn URLs or enough info to search found")
+        else:
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            connector = LinkedInConnector()
+            if connector.login():
+                for i, contact in enumerate(linkedin_contacts):
+                    status_text.text(f"Processing {contact.name}...")
+                    
+                    # If we don't have a LinkedIn URL but have name and organization, search for it
+                    if not contact.linkedin and contact.name and contact.organization:
+                        status_text.text(f"Searching for {contact.name} on LinkedIn...")
+                        profile_url = connector.search_person(contact.name, contact.organization)
+                        if profile_url:
+                            contact.linkedin = profile_url
+                            db.update_contact(contact)
+                            status_text.text(f"Found LinkedIn profile for {contact.name}")
+                        else:
+                            status_text.text(f"Could not find LinkedIn profile for {contact.name}")
+                            progress_bar.progress((i + 1) / len(linkedin_contacts))
+                            continue
+                    
+                    # Now that we have a LinkedIn URL, try to connect
+                    if contact.linkedin:
+                        status_text.text(f"Connecting with {contact.name}...")
+                        message = utils.suggest_follow_up_template(contact, template_type="linkedin")
+                        if connector.send_connection_request(contact.linkedin, message):
+                            contact.connection_status = "Requested"
+                            db.update_contact(contact)
+                            status_text.text(f"✅ Connected with {contact.name}")
+                        else:
+                            status_text.text(f"❌ Failed to connect with {contact.name}")
+                    
+                    progress_bar.progress((i + 1) / len(linkedin_contacts))
+                    time.sleep(2)  # Avoid rate limiting
+                
+                connector.close()
+                st.success(f"Process completed for {len(linkedin_contacts)} contacts")
+            else:
+                st.error("Failed to login to LinkedIn")
+    
     st.divider()
     
     # Search
@@ -113,11 +174,12 @@ with st.sidebar:
     # About
     st.subheader("About")
     st.markdown("""
-        This Personal CRM Assistant helps you:
-        - Extract contacts from documents
-        - Organize your professional network
-        - Keep track of important connections
-        """)
+    This Personal CRM Assistant helps you:
+    - Extract contacts from documents
+    - Organize your professional network
+    - Keep track of important connections
+    - Connect on LinkedIn with personalized messages
+    """)
 
 # Main content area
 if st.session_state.review_mode and st.session_state.extracted_contacts:
@@ -137,10 +199,11 @@ if st.session_state.review_mode and st.session_state.extracted_contacts:
                 st.write(f"**Email:** {contact.email}")
             if contact.phone:
                 st.write(f"**Phone:** {contact.phone}")
+            if contact.linkedin:
+                st.write(f"**LinkedIn:** {contact.linkedin}")
             st.write(f"**Source:** {contact.source_document}")
         
         with col2:
-            # Allow editing if needed (in a real app, we'd implement inline editing)
             if st.button(f"Remove", key=f"remove_{i}"):
                 st.session_state.extracted_contacts.pop(i)
                 st.rerun()
@@ -156,19 +219,18 @@ if st.session_state.review_mode and st.session_state.extracted_contacts:
             st.session_state.extracted_contacts = []
             st.session_state.review_mode = False
             st.rerun()
-
+            
 elif st.session_state.show_add_contact:
     # Manual contact form
     st.header("Add Contact Manually")
     
     with st.form("contact_form"):
         name = st.text_input("Full Name *")
-        col1, col2 = st.columns(2)
         
+        col1, col2 = st.columns(2)
         with col1:
             title = st.text_input("Job Title")
             email = st.text_input("Email")
-        
         with col2:
             organization = st.text_input("Organization")
             phone = st.text_input("Phone")
@@ -217,14 +279,13 @@ elif st.session_state.show_contact_details:
         
         with col1:
             st.header(contact.name)
-            
             if contact.title and contact.organization:
                 st.subheader(f"{contact.title} at {contact.organization}")
             elif contact.title:
                 st.subheader(contact.title)
             elif contact.organization:
                 st.subheader(contact.organization)
-            
+                
             st.divider()
             
             col_a, col_b = st.columns(2)
@@ -233,7 +294,6 @@ elif st.session_state.show_contact_details:
                     st.markdown(f"**Email:** {contact.email}")
                 if contact.phone:
                     st.markdown(f"**Phone:** {contact.phone}")
-            
             with col_b:
                 if contact.linkedin:
                     st.markdown(f"**LinkedIn:** [{contact.linkedin}]({contact.linkedin})")
@@ -245,7 +305,7 @@ elif st.session_state.show_contact_details:
             if contact.notes:
                 st.subheader("Notes")
                 st.write(contact.notes)
-            
+                
             if contact.tags:
                 st.subheader("Tags")
                 for tag in contact.tags:
@@ -257,26 +317,91 @@ elif st.session_state.show_contact_details:
             if st.button("Edit Contact", use_container_width=True):
                 # In a full app, we'd implement contact editing
                 st.write("Edit functionality would go here")
-            
+                
             if st.button("Delete Contact", use_container_width=True):
                 db.delete_contact(contact.id)
                 st.success("Contact deleted successfully!")
                 st.session_state.show_contact_details = None
                 load_contacts()
                 st.rerun()
-            
+                
             st.divider()
             
             st.subheader("Follow Up")
+            
             if st.button("Generate Email Template", use_container_width=True):
                 template = utils.suggest_follow_up_template(contact)
                 st.text_area("Follow Up Template", template, height=300)
+                
+            # LinkedIn section
+            if contact.linkedin:
+                st.divider()
+                st.subheader("LinkedIn")
+                
+                # Check connection status
+                if st.button("Check Connection Status", use_container_width=True):
+                    if st.session_state.linkedin_connector is None:
+                        st.session_state.linkedin_connector = LinkedInConnector()
+                    
+                    if st.session_state.linkedin_connector.login():
+                        status = st.session_state.linkedin_connector.check_connection_status(contact.linkedin)
+                        contact.connection_status = status
+                        db.update_contact(contact)
+                        st.success(f"Connection status: {status}")
+                        st.rerun()
+                    else:
+                        st.error("Failed to login to LinkedIn. Check your credentials in .env file.")
+                
+                # Display current status
+                connection_status = contact.connection_status or "Not Connected"
+                st.write(f"**Status:** {connection_status}")
+                
+                # Show connect button if not already connected or requested
+                if connection_status != "Connected" and connection_status != "Requested":
+                    if st.button("Connect on LinkedIn", use_container_width=True):
+                        if st.session_state.linkedin_connector is None:
+                            st.session_state.linkedin_connector = LinkedInConnector()
+                        
+                        if st.session_state.linkedin_connector.login():
+                            # Generate connection message
+                            connection_message = utils.suggest_follow_up_template(contact, template_type="linkedin")
+                            
+                            # Send connection request
+                            profile_url = contact.linkedin
+                            if st.session_state.linkedin_connector.send_connection_request(profile_url, connection_message):
+                                st.success("LinkedIn connection request sent!")
+                                contact.connection_status = "Requested"
+                                db.update_contact(contact)
+                                st.rerun()
+                            else:
+                                st.error("Failed to send connection request")
+                        else:
+                            st.error("Failed to login to LinkedIn. Check your credentials in .env file.")
+            elif contact.name and contact.organization:
+                st.divider()
+                st.subheader("LinkedIn")
+                if st.button("Find LinkedIn Profile", use_container_width=True):
+                    if st.session_state.linkedin_connector is None:
+                        st.session_state.linkedin_connector = LinkedInConnector()
+                    
+                    if st.session_state.linkedin_connector.login():
+                        profile_url = st.session_state.linkedin_connector.search_person(contact.name, contact.organization)
+                        if profile_url:
+                            contact.linkedin = profile_url
+                            db.update_contact(contact)
+                            st.success(f"LinkedIn profile found: {profile_url}")
+                            st.rerun()
+                        else:
+                            st.warning(f"Could not find LinkedIn profile for {contact.name}")
+                    else:
+                        st.error("Failed to login to LinkedIn. Check your credentials in .env file.")
     else:
         st.error("Contact not found")
         st.session_state.show_contact_details = None
 
 else:
     # Main dashboard view
+    
     # Process uploaded document
     if uploaded_file is not None and process_button:
         try:
@@ -296,7 +421,7 @@ else:
                 source_name = uploaded_file.name
                 if event_name:
                     source_name = f"{event_name} - {source_name}"
-                
+                    
                 contacts = extract_contacts(text, source_name, source_type.lower())
                 
                 # Add event information if provided
@@ -314,7 +439,6 @@ else:
             
             # Clean up
             os.unlink(temp_file_path)
-            
         except Exception as e:
             st.error(f"Error processing document: {str(e)}")
     
@@ -339,20 +463,21 @@ else:
                         st.write(contact.title)
                     elif contact.organization:
                         st.write(contact.organization)
-                    
+                        
                     if contact.email:
                         st.write(f"📧 {contact.email}")
                     if contact.phone:
                         st.write(f"📱 {contact.phone}")
+                        
+                    if contact.linkedin:
+                        status_emoji = "🔄" if contact.connection_status == "Requested" else "✅" if contact.connection_status == "Connected" else "🔗"
+                        st.write(f"{status_emoji} LinkedIn")
+                        
                     if contact.source_document:
                         st.write(f"Source: {contact.source_document}")
-                    
+                        
                     if st.button("View Details", key=f"view_{contact.id}"):
                         view_contact(contact.id)
-
-# Add some styling
-st.markdown("""
-""", unsafe_allow_html=True)
 
 # Initialize database on first run
 db.initialize_db()

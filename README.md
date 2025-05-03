@@ -50,4 +50,4 @@ streamlit run app.py
 1. Upload a document (PDF) or image (business card)
 2. The system will extract contacts automatically
 3. View, search, and manage your contacts through the UI
-4. Add contacts manually if needed 
+4. Add contacts manually if needed

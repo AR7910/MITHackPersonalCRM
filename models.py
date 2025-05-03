@@ -15,15 +15,13 @@ class Contact(BaseModel):
     event: Optional[str] = None
     notes: Optional[str] = None
     tags: List[str] = []
-    follow_up_status: Optional[str] = "Not Started"  # Not Started, In Progress, Done
+    follow_up_status: Optional[str] = "Not Started" # Not Started, In Progress, Done
     last_contacted: Optional[str] = None
-    connection_status: Optional[str] = None  # Not Connected, Requested, Connected
+    connection_status: Optional[str] = None # Not Connected, Requested, Connected
     date_added: str = Field(default_factory=lambda: datetime.now().isoformat())
     
-    # Add the to_dict method that's missing
     def to_dict(self):
-        return self.model_dump()  # For pydantic v2
-        # If using older pydantic version, use: return self.dict()
+        return self.dict()  # For pydantic v1
     
     @classmethod
     def from_dict(cls, data):
